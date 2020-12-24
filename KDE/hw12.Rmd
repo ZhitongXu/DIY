@@ -1,0 +1,210 @@
+---
+title: "非参第12次作业"
+author: "许智彤"
+date: "2019/12/7"
+output: html_document
+---
+
+#### 第一问
+
+Ques: 估计$\hat{p}_h(x)$
+
+Presume: 真实分布为"the claw"
+
+$p(x) = \frac{1}{2} \phi(x;0,1) + \frac{1}{10} \Sigma_{j=0}^4 \phi(x; (j/2)-1, 1/10)$
+
+Set:
+
+从真实的分布中抽取1000个样本点，使用高斯核来估计它的分布
+
+假设p(x)为正态分布，进而得到$h_{opt} = 1.06 \sigma n^{-1/5}$，作为最优带宽
+
+```{r}
+par(mfrow = c(2,2))
+
+genClaw = function(x) {
+  y = dnorm(x)/2 + 0.1*dnorm(x,-1,0.1) + 0.1*dnorm(x,-0.5,0.1) + 0.1*dnorm(x,0,0.1) + 0.1*dnorm(x,0.5,0.1) + 0.1*dnorm(x,1,0.1)
+  return(y)
+}
+
+# 生成真实的概率密度图像
+x = seq(-3, 3, 0.006)
+y = genClaw(x)
+plot(x, y, type = "l", main = "真实分布", xlab = "", ylab = "", ylim = c(0,1), xlim = c(-3, 3))
+
+# 生成服从该密度函数的一组数据，之前作图的x为样本点的值，把x对应的密度作为频率扩大100倍为频数（值为x的样本点的个数）
+dat = rep(x, times = round(y,2)*100)
+
+# 从中抽取1000个样本点
+n = 1000
+set.seed(2019)
+mysample = sample(dat, n)
+
+# 计算其σ
+sigma = sd(mysample)
+
+# 代入σ, n 计算最优带宽
+h = 1.06*sigma*n^(-1/5)
+
+plot(density(dat, bw = h, kernel="gaussian"), ylab = "", xlim = c(-3,3), ylim = c(0,1), main = "设定中最优带宽结果")
+
+plot(density(dat, bw = 0.05, kernel="gaussian"), ylab = "", xlim = c(-3,3), ylim = c(0,1), main = "交叉验证得出的最优带宽结果")
+
+plot(density(dat, bw = 0.002, kernel="gaussian"), ylab = "", xlim = c(-3,3), ylim = c(0,1), main = "更小带宽的结果")
+```
+
+Conclusion: 
+
+可以看到用交叉验证得出的最优带宽结果表现最好，设定中的公式计算出的带宽可能由于假定原分布是正态分布而实际上并不是，再加上生成数据和抽样的手段导致方差偏小，得出的最优带宽太大，产生了过光滑的现象，表现不太好；同样，更小的带宽结果也不太行，虽然五个爪子的形态表现出来了，但噪声多，中部概率密度估计偏大了。
+
+#### 第二问
+
+Ques: 用bootstrap法估计置信区间并于sm density包比较
+
+Set:
+
+h = 0.05
+
+bootstrap times B = 1000
+
+upper quantile α = 0.05
+
+```{r}
+par(mfrow = c(1, 2))
+# 从这1000个样本点中有放回的抽取1000个样本点组成新的样本
+# 重复1000次
+n = 1000
+h = 0.05
+xn = density(mysample, bw = h)$x
+ph = density(mysample, bw = h)$y
+Rs = NULL
+for (i in 1:n) {
+  newsample = sample(mysample, n, replace = T)
+  phhat = density(newsample, bw = h)$y
+  R = sqrt(n*h)*(phhat - ph)
+  Rs = rbind(Rs, R)
+}
+
+myquantile = function(x) {
+  return(as.numeric(quantile(x, 0.95)))
+}
+res = apply(Rs, 2, myquantile)
+
+ln = ph - res/sqrt(n*h)
+un = ph + res/sqrt(n*h)
+plot(density(mysample, bw = h), main = "Bootstrap法", xlim = c(-3, 3), ylim = c(0,1))
+lines(xn, ln, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+lines(xn, un, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+
+# sm density包结果
+library(sm)
+sm.density(dat, h = 0.05, display = "se", title = "sm包", xlim = c(-3, 3), ylim = c(0,1))
+```
+
+Conclusion:
+
+对于h = 0.05这个很好的带宽，用bootstrap法得到的upper quantile α = 0.05的置信区间要比sm包默认参数给出的置信区间要大
+
+#### 第三问
+
+Ques: 用bias-reduced法估计$\tilde{p}_h(x)$及其置信区间
+
+Presume: $\tilde{p}_h(x) = \frac{4}{3}(\hat{p}_h(x) - \frac{1}{4} \hat{p}_{2h})$
+
+Set: 
+
+bootstrap times B = 1000
+
+95%置信限的bootstrap置信区间使用带宽h = 0.005, h = 0.05, h = 0.2
+
+```{r}
+par(mfrow = c(1, 3))
+
+myquantile = function(x) {
+  return(as.numeric(quantile(x, 0.95)))
+}
+
+n = 1000
+hs = c(0.005, 0.05, 0.2)
+for (h in hs) {
+  xn = density(mysample, bw = h)$x
+  ph = density(mysample, bw = h)$y
+  p2h = density(mysample, bw = 2*h)$y
+  tildeph = 4/3*ph - 1/3*p2h
+  Rs = NULL
+  for (i in 1:n) {
+    newsample = sample(mysample, n, replace = T)
+    phhat = density(newsample, bw = h)$y
+    p2hhat = density(newsample, bw = 2*h)$y
+    tildephhat = 4/3*phhat - 1/3*p2hhat
+    R = sqrt(n*h)*(tildephhat - tildeph)
+    Rs = rbind(Rs, R)
+  }
+  
+  res = apply(Rs, 2, myquantile)
+  
+  ln = ph - res/sqrt(n*h)
+  un = ph + res/sqrt(n*h)
+  plot(xn, tildeph, type = "l", col = 'blue', main = "", xlim = c(-3, 3), ylim = c(0,1))
+  lines(xn, ln, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+  lines(xn, un, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+  lines(x, y, lty=1, col = 'red', ylim = c(0,1), xlim = c(-3, 3))
+}
+```
+
+```{r}
+par(mfrow=c(1,2))
+
+# bias-reduced法绘制h = 0.05的估计及其置信区间
+n = 1000
+h = 0.05
+xn = density(mysample, bw = h)$x
+ph = density(mysample, bw = h)$y
+p2h = density(mysample, bw = 2*h)$y
+tildeph = 4/3*ph - 1/3*p2h
+Rs = NULL
+for (i in 1:n) {
+  newsample = sample(mysample, n, replace = T)
+  phhat = density(newsample, bw = h)$y
+  p2hhat = density(newsample, bw = 2*h)$y
+  tildephhat = 4/3*phhat - 1/3*p2hhat
+  R = sqrt(n*h)*(tildephhat - tildeph)
+  Rs = rbind(Rs, R)
+}
+
+res = apply(Rs, 2, myquantile)
+
+ln = ph - res/sqrt(n*h)
+un = ph + res/sqrt(n*h)
+plot(xn, tildeph, type = "l", col = 'blue', main = "bias-reduced法", xlim = c(-3, 3), ylim = c(0,1))
+lines(xn, ln, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+lines(xn, un, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+lines(x, y, lty=1, col = 'red', ylim = c(0,1), xlim = c(-3, 3))
+
+# 初始估计
+xn = density(mysample, bw = h)$x
+ph = density(mysample, bw = h)$y
+Rs = NULL
+for (i in 1:n) {
+  newsample = sample(mysample, n, replace = T)
+  phhat = density(newsample, bw = h)$y
+  R = sqrt(n*h)*(phhat - ph)
+  Rs = rbind(Rs, R)
+}
+
+myquantile = function(x) {
+  return(as.numeric(quantile(x, 0.95)))
+}
+res = apply(Rs, 2, myquantile)
+
+ln = ph - res/sqrt(n*h)
+un = ph + res/sqrt(n*h)
+plot(xn, ph, type = "l", col = 'blue', main = "初始", xlim = c(-3, 3), ylim = c(0,1))
+lines(xn, ln, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+lines(xn, un, lty = 3, xlim = c(-3, 3), ylim = c(0,1))
+lines(x, y, lty=1, col = 'red', ylim = c(0,1), xlim = c(-3, 3))
+```
+
+Conclusion:
+
+在这种情况下，并没有太大的改进，效果还稍微差一些。
